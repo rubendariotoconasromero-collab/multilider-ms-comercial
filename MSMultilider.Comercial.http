@@ -1,0 +1,53 @@
+@host = http://localhost:5213
+@token = PEGAR_JWT_EMITIDO_POR_SEGURIDAD
+@clienteId = 1
+@asesorId = 1
+@propiedadId = 1
+@ventaId = 1
+@contratoId = 1
+
+### Liveness (sin token)
+GET {{host}}/health
+
+### Crear cliente
+POST {{host}}/api/clientes
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"ci":"DEMO-001","nombre_completo":"Cliente de desarrollo","correo":"cliente@example.com"}
+
+### Crear asesor
+POST {{host}}/api/asesores
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"nombre_completo":"Asesor de desarrollo","porcentaje_comision":5}
+
+### Registrar venta a crédito: editar IDs y UUID para cada nueva operación
+POST {{host}}/api/ventas
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+ "solicitud_id":"11111111-1111-4111-8111-111111111111",
+ "cliente_id":{{clienteId}}, "asesor_id":{{asesorId}}, "propiedad_id":{{propiedadId}},
+ "fecha":"2026-11-04", "tipo_venta":"CREDITO", "descuento":0,
+ "cuota_inicial":100, "numero_cuotas":12, "tasa_interes":8,
+ "tasa_mora":0, "fecha_inicio_pago":"2026-12-04"
+}
+
+### Contrato financiero que consulta Finanzas
+GET {{host}}/api/ventas/{{ventaId}}/financiacion
+Authorization: Bearer {{token}}
+
+### Firmar contrato y programar entrega
+POST {{host}}/api/contratos/{{contratoId}}/firmar
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"fecha_firma":"2026-11-05","fecha_programada_entrega":"2026-11-06"}
+
+### Historial
+GET {{host}}/api/ventas?page=1&per_page=20
+Authorization: Bearer {{token}}
+
