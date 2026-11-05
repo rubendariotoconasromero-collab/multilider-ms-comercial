@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -16,15 +17,26 @@ public static class StartupHook
             Environment.GetEnvironmentVariable("MULTILIDER_F5_BOUNDARY_DIR") is not { } directory)
             throw new InvalidOperationException("Isolated F5 boundary fixture required.");
 
+        var checkpoint = new Checkpoint(directory);
         DiagnosticListener.AllListeners.Subscribe(new Subscription<DiagnosticListener>(listener =>
         {
+            if (listener.Name == "Microsoft.EntityFrameworkCore")
+            {
+                listener.Subscribe(new Subscription<KeyValuePair<string, object?>>(entry =>
+                {
+                    if (entry.Key == RelationalEventId.TransactionCommitting.Name) checkpoint.Transaction(false);
+                    if (entry.Key == RelationalEventId.TransactionCommitted.Name) checkpoint.Transaction(true);
+                    if (entry.Key == RelationalEventId.TransactionDisposed.Name) checkpoint.ReceiptFinished();
+                }));
+                return;
+            }
             if (listener.Name != "Microsoft.Extensions.Hosting") return;
             listener.Subscribe(new Subscription<KeyValuePair<string, object?>>(entry =>
             {
                 if (entry is not { Key: "HostBuilding", Value: IHostBuilder host }) return;
                 host.ConfigureServices((_, services) =>
                 {
-                    services.AddSingleton(new Checkpoint(directory));
+                    services.AddSingleton(checkpoint);
                     services.AddSingleton<IOperationObserver>(sp => sp.GetRequiredService<Checkpoint>());
                     services.AddSingleton<OperationChannel, ObservedChannel>();
                 });
@@ -41,8 +53,66 @@ public static class StartupHook
 
     private sealed class Checkpoint(string directory) : IOperationObserver
     {
-        public void Boundary(Guid operation, string step, bool after) =>
+        private sealed record Stage(Guid Operation, string Step, bool Receipt);
+        private readonly AsyncLocal<Stage?> stage = new();
+
+        public void Boundary(Guid operation, string step, bool after)
+        {
+            stage.Value = new Stage(operation, step, after);
             Wait(operation, step, after ? "after" : "before");
+        }
+
+        public void Transaction(bool committed)
+        {
+            if (stage.Value is not { } current) return;
+            var point = current.Receipt ? "Guardar-" + current.Step : current.Step == "PrepararVenta" ? "PersistirVenta" : null;
+            if (point is not null) Wait(current.Operation, point, committed ? "after" : "before");
+        }
+
+        public void ReceiptFinished()
+        {
+            if (stage.Value is not { Receipt: true } current) return;
+            var marker = Path.Combine(directory, $"{current.Operation:N}-{current.Step}-after");
+            var watch = marker + ".watch";
+            if (File.Exists(watch) && File.ReadAllText(watch) == Environment.ProcessId.ToString())
+                File.WriteAllText(marker + ".finished", "");
+        }
+
+        public void BeforeRequest(HttpMethod method, string path)
+        {
+            if (stage.Value is not { Step: "PrepararFinanzas", Receipt: false } current ||
+                method != HttpMethod.Post || !path.EndsWith("/preparar", StringComparison.Ordinal))
+                return;
+            var pathToFault = Path.Combine(directory, $"{current.Operation:N}-PrepararFinanzas.reject");
+            if (File.Exists(pathToFault))
+            {
+                File.Move(pathToFault, pathToFault + ".claimed");
+                throw new ProtocolException("Isolated fixture forced a preparation rejection.", 409);
+            }
+        }
+
+        public void CommittedResponse(HttpMethod method, string path, object? body)
+        {
+            if (stage.Value is not { Receipt: false } current || method != HttpMethod.Post) return;
+            // Status and renewal calls within a step are separate from its final
+            // acknowledgement. Only block the successful response being tested.
+            var finalAction = current.Step switch
+            {
+                "Reservar" => path.EndsWith("/reservar", StringComparison.Ordinal),
+                "PrepararFinanzas" => path.EndsWith("/preparar", StringComparison.Ordinal),
+                "AutorizarConfirmacion" => body is OperationCheck { Action: "pivot" },
+                "ConfirmarPropiedad" => path.EndsWith("/confirmar", StringComparison.Ordinal),
+                "ActivarFinanzas" => path.EndsWith("/activar", StringComparison.Ordinal),
+                "Abortar" => body is OperationCheck { Action: "abort" },
+                "AbortarFinanzas" => path.EndsWith("/abortar-preparacion", StringComparison.Ordinal),
+                "LiberarReserva" => path.EndsWith("/liberar", StringComparison.Ordinal),
+                "AutorizarAnulacion" => body is OperationCheck { Action: "cancel-pivot" },
+                "CerrarFinanzas" => path.EndsWith("/cerrar", StringComparison.Ordinal),
+                "RevertirPropiedad" => path.EndsWith("/revertir-confirmacion", StringComparison.Ordinal),
+                _ => false,
+            };
+            if (finalAction) Wait(current.Operation, "Respuesta-" + current.Step, "after");
+        }
 
         public void Wait(Guid operation, string step, string side)
         {
@@ -52,7 +122,8 @@ public static class StartupHook
             try { File.Move(armed, marker + ".claimed"); }
             catch (FileNotFoundException) { return; } // The other worker claimed it.
 
-            File.WriteAllText(marker + ".hit", Environment.ProcessId.ToString());
+            File.WriteAllText(marker + ".pid", Environment.ProcessId.ToString());
+            File.Move(marker + ".pid", marker + ".hit");
             if (!SpinWait.SpinUntil(() =>
             {
                 Thread.Sleep(25);
@@ -69,7 +140,9 @@ public static class StartupHook
         public override async Task<JsonElement> Send(string service, HttpMethod method, string path, object? body,
             CancellationToken ct, string? bearer = null)
         {
+            boundary.BeforeRequest(method, path);
             var result = await base.Send(service, method, path, body, ct, bearer);
+            boundary.CommittedResponse(method, path, body);
             const string prefix = "internal/identity/v1/operaciones/";
             const string suffix = "/provision";
             if (service == "seguridad" && method == HttpMethod.Post && path.StartsWith(prefix) && path.EndsWith(suffix)

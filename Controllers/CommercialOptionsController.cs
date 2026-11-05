@@ -9,6 +9,10 @@ public sealed class CommercialOptionsController(AppDbContext db):ControllerBase 
         var clients=db.Clientes.Where(x=>x.Estado);
         var advisers=db.Asesores.Where(x=>x.Estado);
         if(!string.IsNullOrEmpty(search)){clients=clients.Where(x=>x.NombreCompleto.Contains(search)||x.Ci.Contains(search));advisers=advisers.Where(x=>x.NombreCompleto.Contains(search));}
-        return Ok(new{clientes=await clients.OrderBy(x=>x.Id).Take(100).ToListAsync(ct),asesores=await advisers.OrderBy(x=>x.Id).Take(100).ToListAsync(ct)});
+        var clientOptions=await clients.OrderBy(x=>x.Id).Take(100)
+            .Select(x=>new{x.Id,x.NombreCompleto,x.Ci,x.Telefono,x.Estado}).ToListAsync(ct);
+        var adviserOptions=await advisers.OrderBy(x=>x.Id).Take(100)
+            .Select(x=>new{x.Id,x.UserId,x.NombreCompleto,x.Correo,x.PorcentajeComision,x.Estado}).ToListAsync(ct);
+        return Ok(new{clientes=clientOptions,asesores=adviserOptions});
     }
 }

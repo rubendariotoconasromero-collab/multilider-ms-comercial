@@ -223,14 +223,21 @@ public sealed class SaleCoordinator(AppDbContext db,OperationChannel channel,ICo
     }
     private async Task<JsonElement> ReservationChange(SaleOperation op,string action,CancellationToken ct,string? commandStep=null) {
         JsonElement reservation;
-        if(op.Reservation is null) {
+        if(op.Reservation is null || action=="liberar") {
             reservation=await channel.Send("propiedades",HttpMethod.Get,$"internal/catalogo/v2/operaciones/{op.Id:D}/reserva",null,ct);
             op.Reservation=reservation.GetRawText();
         } else reservation=JsonSerializer.Deserialize<JsonElement>(op.Reservation);
         if(action=="liberar"&&reservation.GetProperty("estado_reserva").GetString() is "Liberada" or "Vencida")return reservation;
-        return await channel.Send("propiedades",HttpMethod.Post,$"internal/catalogo/v2/operaciones/{op.Id:D}/{action}",
-            new{operacion_id=op.Id,command_id=OperationProtocol.Command(op.Id,commandStep??action),fencing_token=reservation.GetProperty("fencing_token").GetInt64(),
-                price_version=reservation.GetProperty("price_version").GetString()},ct);
+        try {
+            return await channel.Send("propiedades",HttpMethod.Post,$"internal/catalogo/v2/operaciones/{op.Id:D}/{action}",
+                new{operacion_id=op.Id,command_id=OperationProtocol.Command(op.Id,commandStep??action),fencing_token=reservation.GetProperty("fencing_token").GetInt64(),
+                    price_version=reservation.GetProperty("price_version").GetString()},ct);
+        } catch(ProtocolException e) when(action=="liberar"&&e.Status==409) {
+            // The hold can expire between the read and the release command.
+            var current=await channel.Send("propiedades",HttpMethod.Get,$"internal/catalogo/v2/operaciones/{op.Id:D}/reserva",null,ct);
+            if(current.GetProperty("estado_reserva").GetString() is "Liberada" or "Vencida")return current;
+            throw;
+        }
     }
     private async Task FinishStep(SaleOperation op,Guid lease,string next,object? receipt,string? error,bool terminal,CancellationToken ct) {
         var offer=op.Offer;var reservation=op.Reservation;var saleId=op.VentaId;var requestedState=op.State;var step=op.Step;
