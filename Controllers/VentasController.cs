@@ -16,7 +16,10 @@ public sealed class VentasController(AppDbContext db,ComercialService service):C
         if(clienteId.HasValue) query=query.Where(x=>x.ClienteId==clienteId);
         if(asesorId.HasValue) query=query.Where(x=>x.AsesorId==asesorId);
         if(estado is not null) query=query.Where(x=>x.Estado==estado);
-        return Ok(await Api.Paginate(query,page,perPage,ct));
+        if(Request.Query["tipo_venta"].ToString() is "CONTADO" or "CREDITO") {var type=Request.Query["tipo_venta"].ToString();query=query.Where(x=>x.TipoVenta==type);}
+        if(DateOnly.TryParse(Request.Query["fecha_inicio"],out var from))query=query.Where(x=>x.Fecha>=from);
+        if(DateOnly.TryParse(Request.Query["fecha_fin"],out var until))query=query.Where(x=>x.Fecha<=until);
+        return Ok(await Api.Paginate(query.OrderByDescending(x=>x.Fecha).ThenByDescending(x=>x.Id),page,perPage,ct));
     }
     [HttpGet("{id:int}"),Authorize(Policy="acceso_ventas")]
     public async Task<IActionResult> Get(int id,CancellationToken ct)=>

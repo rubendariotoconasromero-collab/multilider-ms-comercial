@@ -11,6 +11,15 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options):Service
     public DbSet<AvailabilityIntent> AvailabilityIntents=>Set<AvailabilityIntent>();
     public DbSet<AvailabilityCommand> AvailabilityCommands=>Set<AvailabilityCommand>();
     protected override void OnModelCreating(ModelBuilder m) {
+        m.Entity<SaleOperation>().HasKey(x=>x.Id);
+        m.Entity<CommercialCommand>().HasKey(x=>x.Id);
+        m.Entity<CommercialCommand>().HasIndex(x=>x.OperationId);
+        m.Entity<ProfileOperation>().HasKey(x=>x.Id);
+        m.Entity<DocumentRevision>().HasKey(x=>x.Id);
+        m.Entity<SaleOperation>().Property(x=>x.Stamp).IsConcurrencyToken();
+        m.Entity<SaleOperation>().HasIndex(x=>new{x.State,x.NextAttempt});
+        m.Entity<OperationStep>().HasKey(x=>x.Id);
+        m.Entity<OperationStep>().HasIndex(x=>new{x.OperationId,x.Step}).IsUnique();
         m.Entity<Cliente>().HasIndex(x=>x.Ci).IsUnique();
         m.Entity<Venta>().HasIndex(x=>x.SolicitudId).IsUnique();
         m.Entity<Venta>().HasIndex(x=>x.PropiedadActivaId).IsUnique().HasFilter("[PropiedadActivaId] IS NOT NULL");
@@ -26,6 +35,19 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options):Service
         m.Entity<AvailabilityCommand>().HasOne(x=>x.Intent).WithMany().HasForeignKey(x=>x.IntentId).OnDelete(DeleteBehavior.Restrict);
         m.Entity<AvailabilityCommand>().HasIndex(x=>new{x.IntentId,x.CreatedAt});
         base.OnModelCreating(m);
+        m.Entity<CommercialCommand>().Property(x=>x.Result).HasColumnType(Database.IsSqlServer()?"nvarchar(max)":"TEXT").Metadata.SetMaxLength(null);
+        m.Entity<CommercialCommand>().Property(x=>x.Hash).HasMaxLength(64);
+        m.Entity<SaleOperation>().Property(x=>x.State).HasMaxLength(32);
+        m.Entity<SaleOperation>().Property(x=>x.Step).HasMaxLength(64);
+        m.Entity<SaleOperation>().Property(x=>x.Kind).HasMaxLength(32);
+        m.Entity<OperationStep>().Property(x=>x.Step).HasMaxLength(64);
+        m.Entity<Venta>().Property(x=>x.DocumentSnapshot).HasColumnType(Database.IsSqlServer()?"nvarchar(max)":"TEXT").Metadata.SetMaxLength(null);
+        m.Entity<ProfileOperation>().Property(x=>x.Payload).HasColumnType(Database.IsSqlServer()?"nvarchar(max)":"TEXT").Metadata.SetMaxLength(null);
+        m.Entity<ProfileOperation>().Property(x=>x.PayloadHash).HasMaxLength(64);
+        foreach(var name in new[]{nameof(SaleOperation.Payload),nameof(SaleOperation.Offer),nameof(SaleOperation.Reservation)})
+            m.Entity<SaleOperation>().Property(name).HasColumnType(Database.IsSqlServer()?"nvarchar(max)":"TEXT").Metadata.SetMaxLength(null);
+        m.Entity<SaleOperation>().Property(x=>x.PayloadHash).HasMaxLength(64);
+        m.Entity<OperationStep>().Property(x=>x.Result).HasColumnType(Database.IsSqlServer()?"nvarchar(max)":"TEXT").Metadata.SetMaxLength(null);
         m.Entity<AvailabilityIntent>().Property(x=>x.ActorIssuer).HasMaxLength(255);
         m.Entity<AvailabilityIntent>().Property(x=>x.ActorSubject).HasMaxLength(191);
         m.Entity<AvailabilityCommand>().Property(x=>x.RequestHash).HasMaxLength(64);

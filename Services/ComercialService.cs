@@ -44,10 +44,10 @@ public sealed class ComercialService(AppDbContext db,PropiedadesClient propiedad
             MontoComision=Api.Money(propiedad.PrecioVenta*asesor.PorcentajeComision/100),CuotaInicial=r.CuotaInicial,
             SaldoCredito=r.TipoVenta=="CREDITO"?neto-r.CuotaInicial:0,NumeroCuotas=r.NumeroCuotas,
             TasaInteres=r.TasaInteres,TasaMora=r.TasaMora,FechaInicioPago=r.FechaInicioPago };
-        await using var tx=await db.Database.BeginTransactionAsync(ct);
+        await using var tx=db.Database.CurrentTransaction is null?await db.Database.BeginTransactionAsync(ct):null;
         db.Ventas.Add(venta);await db.SaveChangesAsync(ct);
         db.Contratos.Add(new Contrato { NotaVentaId=venta.Id,CodigoContrato=$"CONT-{r.Fecha.Year}-{venta.Id:D6}",FechaEmision=r.Fecha });
-        await db.SaveChangesAsync(ct);await tx.CommitAsync(ct);
+        await db.SaveChangesAsync(ct);if(tx is not null)await tx.CommitAsync(ct);
         return venta;
     }
     public static VentaFinanciera Snapshot(Venta v)=>new(v.Id,v.ClienteId,v.AsesorId,v.PropiedadId,v.Fecha,v.Estado,v.TipoVenta,
@@ -66,7 +66,8 @@ public sealed class ComercialService(AppDbContext db,PropiedadesClient propiedad
         await db.SaveChangesAsync(ct);
     }
     public async Task<Contrato> Firmar(int id,FirmarContratoRequest r,CancellationToken ct) {
-        activation.RequireReady();
+        await using var tx=db.Database.CurrentTransaction is null?await db.Database.BeginTransactionAsync(ct):null;
+        await Multilider.Operations.OperationProtocol.Lock(db,"commercial:operations",ct);
         Api.Require(r.FechaFirma!=default && r.FechaProgramadaEntrega>=r.FechaFirma,"Fechas de firma y entrega inválidas.");
         var contrato=await db.Contratos.Include(x=>x.NotaVenta).SingleOrDefaultAsync(x=>x.Id==id,ct)
             ?? throw new BusinessException("Contrato no encontrado.",404);
@@ -75,7 +76,7 @@ public sealed class ComercialService(AppDbContext db,PropiedadesClient propiedad
         var entrega=await db.Entregas.SingleOrDefaultAsync(x=>x.ContratoId==id,ct);
         if(entrega is null) db.Entregas.Add(new Entrega { ContratoId=id,FechaProgramada=r.FechaProgramadaEntrega });
         else { Api.Require(entrega.Estado!="Entregado","La entrega ya se completó.",409);entrega.FechaProgramada=r.FechaProgramadaEntrega; }
-        await db.SaveChangesAsync(ct);return contrato;
+        await db.SaveChangesAsync(ct);if(tx is not null)await tx.CommitAsync(ct);return contrato;
     }
 }
 

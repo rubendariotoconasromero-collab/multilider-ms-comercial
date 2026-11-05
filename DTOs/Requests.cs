@@ -24,5 +24,5 @@ public sealed record EntregaRequest(
 public sealed record PropiedadSnapshot(int Id,string Codigo,decimal PrecioVenta,string Moneda,string Estado,bool Activo);
 public sealed record VentaFinanciera(int Id,int ClienteId,int AsesorId,int PropiedadId,DateOnly Fecha,string Estado,
     string TipoVenta,string Moneda,decimal MontoLiquido,decimal CuotaInicial,decimal SaldoCredito,
-    decimal MontoComision,int NumeroCuotas,decimal TasaInteres,decimal TasaMora,DateOnly? FechaInicioPago);
+    decimal MontoComision,int NumeroCuotas,decimal TasaInteres,decimal TasaMora,DateOnly? FechaInicioPago,string CalculationVersion="laravel-v1");
 

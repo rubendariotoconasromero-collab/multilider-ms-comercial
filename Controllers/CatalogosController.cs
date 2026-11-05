@@ -7,18 +7,24 @@ using MSMultilider.Comercial.Models;
 namespace MSMultilider.Comercial.Controllers;
 
 [ApiController,Route("api/clientes"),Authorize(Policy="acceso_clientes")]
-public sealed class ClientesController(AppDbContext db):ControllerBase {
-    [HttpGet] public async Task<IActionResult> List(int page=1,[FromQuery(Name="per_page")] int perPage=20,CancellationToken ct=default)=>
-        Ok(await Api.Paginate(db.Clientes,page,perPage,ct));
+public sealed class ClientesController(AppDbContext db,MSMultilider.Comercial.Services.ISaleActivationGate legacy):ControllerBase {
+    [HttpGet] public async Task<IActionResult> List(string? search,int page=1,[FromQuery(Name="per_page")] int perPage=10,CancellationToken ct=default) {
+        var query=db.Clientes.AsQueryable();
+        if(!string.IsNullOrEmpty(search))query=query.Where(x=>x.Ci.Contains(search)||x.NombreCompleto.Contains(search)||(x.Correo!=null&&x.Correo.Contains(search)));
+        return Ok(await Api.Paginate(query,page,perPage,ct));
+    }
     [HttpGet("{id:int}")] public async Task<IActionResult> Get(int id,CancellationToken ct)=>Ok(await Api.Find(db.Clientes,id,ct));
     [HttpPost] public async Task<IActionResult> Create(ClienteRequest r,CancellationToken ct) {
+        legacy.RequireReady();
         var row=new Cliente();Apply(row,r);db.Clientes.Add(row);await db.SaveChangesAsync(ct);
         return CreatedAtAction(nameof(Get),new{id=row.Id},row);
     }
     [HttpPut("{id:int}")] public async Task<IActionResult> Update(int id,ClienteRequest r,CancellationToken ct) {
+        legacy.RequireReady();
         var row=await Api.Find(db.Clientes,id,ct);Apply(row,r);await db.SaveChangesAsync(ct);return Ok(row);
     }
     [HttpDelete("{id:int}")] public async Task<IActionResult> Disable(int id,CancellationToken ct) {
+        legacy.RequireReady();
         var row=await Api.Find(db.Clientes,id,ct);row.Estado=false;await db.SaveChangesAsync(ct);return NoContent();
     }
     private static void Apply(Cliente x,ClienteRequest r) {
@@ -27,18 +33,24 @@ public sealed class ClientesController(AppDbContext db):ControllerBase {
     }
 }
 [ApiController,Route("api/asesores"),Authorize(Policy="acceso_asesores")]
-public sealed class AsesoresController(AppDbContext db):ControllerBase {
-    [HttpGet] public async Task<IActionResult> List(int page=1,[FromQuery(Name="per_page")] int perPage=20,CancellationToken ct=default)=>
-        Ok(await Api.Paginate(db.Asesores,page,perPage,ct));
+public sealed class AsesoresController(AppDbContext db,MSMultilider.Comercial.Services.ISaleActivationGate legacy):ControllerBase {
+    [HttpGet] public async Task<IActionResult> List(string? search,int page=1,[FromQuery(Name="per_page")] int perPage=10,CancellationToken ct=default) {
+        var query=db.Asesores.AsQueryable();
+        if(!string.IsNullOrEmpty(search))query=query.Where(x=>x.NombreCompleto.Contains(search)||(x.Correo!=null&&x.Correo.Contains(search)));
+        return Ok(await Api.Paginate(query,page,perPage,ct));
+    }
     [HttpGet("{id:int}")] public async Task<IActionResult> Get(int id,CancellationToken ct)=>Ok(await Api.Find(db.Asesores,id,ct));
     [HttpPost] public async Task<IActionResult> Create(AsesorRequest r,CancellationToken ct) {
+        legacy.RequireReady();
         var row=new Asesor();Apply(row,r);db.Asesores.Add(row);await db.SaveChangesAsync(ct);
         return CreatedAtAction(nameof(Get),new{id=row.Id},row);
     }
     [HttpPut("{id:int}")] public async Task<IActionResult> Update(int id,AsesorRequest r,CancellationToken ct) {
+        legacy.RequireReady();
         var row=await Api.Find(db.Asesores,id,ct);Apply(row,r);await db.SaveChangesAsync(ct);return Ok(row);
     }
     [HttpDelete("{id:int}")] public async Task<IActionResult> Disable(int id,CancellationToken ct) {
+        legacy.RequireReady();
         var row=await Api.Find(db.Asesores,id,ct);row.Estado=false;await db.SaveChangesAsync(ct);return NoContent();
     }
     private static void Apply(Asesor x,AsesorRequest r) {
