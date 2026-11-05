@@ -10,15 +10,18 @@ internal static class PhaseFiveRestore {
         if(!string.Equals(Path.GetDirectoryName(root),safeParent,StringComparison.OrdinalIgnoreCase)||!Path.GetFileName(root).StartsWith(folderPrefix)||!Guid.TryParseExact(Path.GetFileName(root)[folderPrefix.Length..],"N",out _))
             throw new InvalidOperationException("Unsafe backup fixture root.");
         Directory.CreateDirectory(root);
-        foreach(var (key,prefix,checks) in new[]{
-            ("MULTILIDER_PROPERTIES_TEST_CONNECTION","multilider_properties_f3_test_",new[]{"propiedades"}),
-            ("MULTILIDER_COMERCIAL_TEST_CONNECTION","multilider_comercial_f4_test_",new[]{"SaleOperation","OperationStep","DocumentRevision"}),
-            ("MULTILIDER_FINANZAS_TEST_CONNECTION","multilider_finanzas_f5_test_",new[]{"FinancialOperation","FinancialCommand","ClosureRejection","Ingresos","Egresos"})
+        foreach(var (key,role,prefix,checks) in new[]{
+            ("MULTILIDER_PROPERTIES_TEST_CONNECTION","PROPIEDADES","multilider_properties_f3_test_",new[]{"propiedades"}),
+            ("MULTILIDER_COMERCIAL_TEST_CONNECTION","COMERCIAL","multilider_comercial_f4_test_",new[]{"SaleOperation","OperationStep","DocumentRevision"}),
+            ("MULTILIDER_FINANZAS_TEST_CONNECTION","FINANZAS","multilider_finanzas_f5_test_",new[]{"FinancialOperation","FinancialCommand","ClosureRejection","Ingresos","Egresos"})
         }) {
             var connection=new SqlConnectionStringBuilder(Environment.GetEnvironmentVariable(key));var source=connection.InitialCatalog;
             if(connection.DataSource!="localhost"||!connection.IntegratedSecurity||!source.StartsWith(prefix,StringComparison.Ordinal)||!Guid.TryParseExact(source[prefix.Length..],"N",out _))
                 throw new InvalidOperationException("Fixture database guard failed.");
-            var restored=prefix+Guid.NewGuid().ToString("N");
+            var destinationName=Environment.GetEnvironmentVariable("MULTILIDER_F5_RESTORE_"+role);
+            var restored=destinationName??prefix+Guid.NewGuid().ToString("N");
+            if(restored==source||!restored.StartsWith(prefix,StringComparison.Ordinal)||!Guid.TryParseExact(restored[prefix.Length..],"N",out _))
+                throw new InvalidOperationException("Unsafe database restoration target.");
             var backup=Path.Combine(root,source+".bak");
             connection.InitialCatalog="master";
             await using var sql=new SqlConnection(connection.ConnectionString);await sql.OpenAsync();
@@ -45,12 +48,14 @@ internal static class PhaseFiveRestore {
                 }
             }
             if(moves.Count!=2)throw new InvalidOperationException("Expected two files in test database.");
+            var verified=false;
             try {
                 await Exec($"RESTORE DATABASE [{restored}] FROM DISK={Quote(backup)} WITH CHECKSUM,RECOVERY,{string.Join(',',moves)}");
                 foreach(var table in checks)if(await Fingerprint(source,table)!=await Fingerprint(restored,table))throw new InvalidOperationException("Restored fixture rows differ.");
+                verified=true;
                 Console.WriteLine($"F5 SQL backup/restore verified: {prefix.TrimEnd('_')} ({checks.Length} table fingerprints).");
             } finally {
-                if(!string.IsNullOrEmpty(await Scalar($"SELECT DB_ID({Quote(restored)})")))await Exec($"DROP DATABASE [{restored}]");
+                if((destinationName is null||!verified)&&!string.IsNullOrEmpty(await Scalar($"SELECT DB_ID({Quote(restored)})")))await Exec($"DROP DATABASE [{restored}]");
             }
         }
     }
