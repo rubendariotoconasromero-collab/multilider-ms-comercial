@@ -33,11 +33,12 @@ public sealed class ContratosController(AppDbContext db,ComercialService service
     }
 }
 [ApiController,Route("api/entregas"),Authorize(Policy="acceso_entregas")]
-public sealed class EntregasController(AppDbContext db,DocumentStore documents):ControllerBase {
+public sealed class EntregasController(AppDbContext db,DocumentStore documents,ISaleActivationGate activation):ControllerBase {
     [HttpGet] public async Task<IActionResult> List(int page=1,[FromQuery(Name="per_page")]int perPage=20,CancellationToken ct=default)=>
         Ok(await Api.Paginate(db.Entregas.Include(x=>x.Contrato),page,perPage,ct));
     [HttpGet("{id:int}")] public async Task<IActionResult> Get(int id,CancellationToken ct)=>Ok(await Api.Find(db.Entregas,id,ct));
     [HttpPut("{id:int}")] public async Task<IActionResult> Update(int id,EntregaRequest r,CancellationToken ct) {
+        activation.RequireReady();
         var row=await db.Entregas.Include(x=>x.Contrato).SingleOrDefaultAsync(x=>x.Id==id,ct)
             ?? throw new BusinessException("Entrega no encontrada.",404);
         Api.Require(row.Contrato.Estado=="Firmado","Se requiere contrato firmado.",409);

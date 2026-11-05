@@ -11,3 +11,5 @@ TestResults/
 appsettings.Local.json
 storage/
 
+
+.artifacts/

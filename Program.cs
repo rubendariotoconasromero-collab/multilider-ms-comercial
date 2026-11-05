@@ -29,6 +29,14 @@ builder.Services.AddSwaggerGen(o => {
     o.AddSecurityRequirement(document=>new OpenApiSecurityRequirement { [new OpenApiSecuritySchemeReference("Bearer",document)] = [] });
 });
 builder.Services.AddScoped<ComercialService>();
+builder.Services.AddSingleton<ISaleActivationGate,SaleActivationGate>();
+builder.Services.AddScoped<AvailabilityService>();
+builder.Services.AddHttpClient<IAvailabilityClient,AvailabilityClient>((sp,c)=> {
+    var config=sp.GetRequiredService<IConfiguration>();
+    var url=config["Availability:BaseUrl"];
+    if(!Uri.TryCreate(url,UriKind.Absolute,out var uri)||uri.Scheme!="https"||!string.IsNullOrEmpty(uri.UserInfo)||!string.IsNullOrEmpty(uri.Query)||!string.IsNullOrEmpty(uri.Fragment))throw new BusinessException("INTEGRATION_NOT_READY: configura Availability:BaseUrl con HTTPS.",503);
+    c.BaseAddress=new Uri(url.TrimEnd('/')+"/");c.Timeout=TimeSpan.FromSeconds(5);
+}).ConfigurePrimaryHttpMessageHandler(sp=>AvailabilityClient.Handler(sp.GetRequiredService<IConfiguration>()));
 builder.Services.AddSingleton<DocumentStore>();
 builder.Services.AddHttpClient<PropiedadesClient>((sp,c)=> {
     c.BaseAddress=new Uri(sp.GetRequiredService<IConfiguration>()["Services:Propiedades"]!);
@@ -43,6 +51,11 @@ builder.Services.AddHttpClient("identity-status",c=> {
     c.Timeout=TimeSpan.FromSeconds(5);
 }).ConfigurePrimaryHttpMessageHandler(()=>new SocketsHttpHandler {AllowAutoRedirect=false,ConnectTimeout=TimeSpan.FromSeconds(2)});
 var app=builder.Build();
+if(args.Contains("--migrate-commercial")) {
+    await using var scope=app.Services.CreateAsyncScope();
+    await ComercialMigrations.Apply(scope.ServiceProvider.GetRequiredService<AppDbContext>(),builder.Configuration["Migrations:DatabaseName"]??"");
+    return;
+}
 app.UseExceptionHandler();
 if(app.Environment.IsDevelopment()) { app.UseSwagger();app.UseSwaggerUI(); }
 app.UseCors();

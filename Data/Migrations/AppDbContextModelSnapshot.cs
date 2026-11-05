@@ -72,6 +72,89 @@ namespace MSMultilider.Comercial.Data.Migrations
                     b.ToTable("Asesores");
                 });
 
+            modelBuilder.Entity("MSMultilider.Comercial.Models.AvailabilityCommand", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int?>("HttpStatus")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("IntentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("RequestHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("Result")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IntentId", "CreatedAt");
+
+                    b.ToTable("AvailabilityCommands");
+                });
+
+            modelBuilder.Entity("MSMultilider.Comercial.Models.AvailabilityIntent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ActorIssuer")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("nvarchar(255)");
+
+                    b.Property<string>("ActorSubject")
+                        .IsRequired()
+                        .HasMaxLength(191)
+                        .HasColumnType("nvarchar(191)");
+
+                    b.Property<int>("AsesorId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ClienteId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("PropiedadId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("AvailabilityIntents");
+                });
+
             modelBuilder.Entity("MSMultilider.Comercial.Models.Cliente", b =>
                 {
                     b.Property<int>("Id")
@@ -359,6 +442,17 @@ namespace MSMultilider.Comercial.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("Ventas");
+                });
+
+            modelBuilder.Entity("MSMultilider.Comercial.Models.AvailabilityCommand", b =>
+                {
+                    b.HasOne("MSMultilider.Comercial.Models.AvailabilityIntent", "Intent")
+                        .WithMany()
+                        .HasForeignKey("IntentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Intent");
                 });
 
             modelBuilder.Entity("MSMultilider.Comercial.Models.Contrato", b =>

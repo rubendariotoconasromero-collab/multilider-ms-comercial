@@ -155,3 +155,20 @@ La compatibilidad legacy sin versión está cerrada por defecto; habilitar solo
 ventana UTC explícita y breve Identity:LegacyUntil para un corte planificado.
 No se alteran cálculos ni se integra aún el flujo distribuido de ventas/pagos.
 Operación y recuperación: ../multilider-docs/operacion/IDENTIDAD_F3.txt.
+
+F4 (rama de trabajo): consumidor de disponibilidad, sin activar la saga F5.
+POST /api/disponibilidad/operaciones prepara la intención y reserva; GET /{uuid}
+consulta/reconcilia; POST /{uuid}/renovar y /liberar usan command_id nuevo.
+Un resultado 202 Pendiente no confirma una reserva ni una venta. Reintentar usa
+el MISMO operacion_id, command_id y payload, con sesión vigente del mismo actor.
+No hay job que guarde/reutilice Bearer de usuario. Intención y comandos se guardan
+antes de HTTP en SQL propio. El cliente usa mTLS, pin de servidor y timeout 2/5 s.
+El certificado jamás se entrega a Vue. Las claves se guardan fuera del repositorio.
+POST venta, anulación, firma y entrega antigua rechazan INTEGRATION_NOT_READY
+hasta F5. No hay flag de producción para saltar esta barrera. Las pruebas de reglas
+anteriores inyectan un colaborador exclusivamente en su proyecto de pruebas.
+Aplicar la nueva migración AvailabilityIntents en una copia primero. HTTP no migra.
+Guía completa: multilider-docs/operacion/CATALOGO_RESERVAS_F4.txt.
+Migración explícita: dotnet MSMultilider.Comercial.dll --migrate-commercial,
+con Migrations__DatabaseName igual al catálogo esperado y BD ya creada.
+Rechaza otra BD o esquema no vacío sin historial. No pasar contraseñas por CLI.

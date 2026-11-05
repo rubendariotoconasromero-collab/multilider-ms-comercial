@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using MSMultilider.Comercial.Data;
@@ -20,7 +21,9 @@ public sealed class SqlServerMigrationTests {
         var options=new DbContextOptionsBuilder<AppDbContext>().UseSqlServer(connection.ConnectionString).Options;
         await using var db=new AppDbContext(options);
         try {
-            await db.Database.MigrateAsync();
+            var creator=db.GetService<Microsoft.EntityFrameworkCore.Storage.IRelationalDatabaseCreator>();await creator.CreateAsync();
+            await Assert.ThrowsAsync<InvalidOperationException>(()=>ComercialMigrations.Apply(db,"foreign-database"));
+            await ComercialMigrations.Apply(db,name);await ComercialMigrations.Apply(db,name);
             Assert.False(db.Database.HasPendingModelChanges());
             var row=new Cliente {Ci="sql-test",NombreCompleto="SQL test"};db.Clientes.Add(row);await db.SaveChangesAsync();
             db.Clientes.Add(new Cliente {Ci="sql-test",NombreCompleto="Duplicate"});

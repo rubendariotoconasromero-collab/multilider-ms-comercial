@@ -18,6 +18,9 @@ using MSMultilider.Comercial.Services;
 
 namespace MSMultilider.Comercial.Tests;
 public sealed class ApiFactory:WebApplicationFactory<Program> {
+    public bool UseLegacyCharacterizationGate {get;init;}=true;
+    public IAvailabilityClient? Availability {get;init;}
+    private sealed class FixtureGate:ISaleActivationGate {public void RequireReady() {}}
     public bool Development { get; init; }
     private readonly SqliteConnection connection=new("Data Source=:memory:");
     public const string TestKey="only-for-automated-tests-not-a-real-secret-0123456789";
@@ -36,6 +39,8 @@ public sealed class ApiFactory:WebApplicationFactory<Program> {
         }));
         builder.ConfigureServices(services=>{
             connection.Open();
+            if(UseLegacyCharacterizationGate){services.RemoveAll<ISaleActivationGate>();services.AddSingleton<ISaleActivationGate,FixtureGate>();}
+            if(Availability is not null){services.RemoveAll<IAvailabilityClient>();services.AddSingleton(Availability);}
             services.AddHttpClient("identity-status").ConfigurePrimaryHttpMessageHandler(()=>new IdentityHandler(this));
             services.RemoveAll<DbContextOptions<AppDbContext>>();
             services.RemoveAll<IDbContextOptionsConfiguration<AppDbContext>>();
@@ -53,8 +58,8 @@ public sealed class ApiFactory:WebApplicationFactory<Program> {
     }
     public static readonly string[] AllPermissions=["acceso_clientes","acceso_asesores","acceso_ventas","acceso_historial_ventas",
         "acceso_contratos","acceso_entregas","acceso_pagos","acceso_ingresos","acceso_egresos"];
-    public static string Token(string[] permissions,string issuer="tests",bool expired=false) {
-        var claims=permissions.Select(p=>new Claim("permission",p)).Concat(new[] {new Claim("sub","1"),new Claim("jti",Guid.NewGuid().ToString()),
+    public static string Token(string[] permissions,string issuer="tests",bool expired=false,int subject=1) {
+        var claims=permissions.Select(p=>new Claim("permission",p)).Concat(new[] {new Claim("sub",subject.ToString()),new Claim("jti",Guid.NewGuid().ToString()),
             new Claim("ver","0",ClaimValueTypes.Integer64),new Claim("iat",DateTimeOffset.UtcNow.AddMinutes(-5).ToUnixTimeSeconds().ToString(),ClaimValueTypes.Integer64)});
         return new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(issuer,"tests",claims,
             DateTime.UtcNow.AddMinutes(-5),DateTime.UtcNow.AddMinutes(expired?-1:10),

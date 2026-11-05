@@ -10,8 +10,9 @@ namespace MSMultilider.Comercial.Services;
 
 public sealed class PropiedadesClient(HttpClient client,IHttpContextAccessor accessor):RelatedApi(client,accessor);
 public sealed class FinanzasClient(HttpClient client,IHttpContextAccessor accessor):RelatedApi(client,accessor);
-public sealed class ComercialService(AppDbContext db,PropiedadesClient propiedades,FinanzasClient finanzas) {
+public sealed class ComercialService(AppDbContext db,PropiedadesClient propiedades,FinanzasClient finanzas,ISaleActivationGate activation) {
     public async Task<Venta> CrearVenta(VentaRequest r,CancellationToken ct) {
+        activation.RequireReady();
         Api.Require(r.SolicitudId!=Guid.Empty,"SolicitudId debe ser un UUID para evitar duplicados.");
         Api.Require(r.Fecha!=default,"Fecha requerida.");
         var hash=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(r))));
@@ -52,6 +53,7 @@ public sealed class ComercialService(AppDbContext db,PropiedadesClient propiedad
     public static VentaFinanciera Snapshot(Venta v)=>new(v.Id,v.ClienteId,v.AsesorId,v.PropiedadId,v.Fecha,v.Estado,v.TipoVenta,
         v.Moneda,v.MontoLiquido,v.CuotaInicial,v.SaldoCredito,v.MontoComision,v.NumeroCuotas,v.TasaInteres,v.TasaMora,v.FechaInicioPago);
     public async Task AnularVenta(int id,CancellationToken ct) {
+        activation.RequireReady();
         var venta=await Api.Find(db.Ventas,id,ct);
         if(venta.Estado=="Anulada") return;
         Api.Require(!await db.Entregas.AnyAsync(x=>x.Contrato.NotaVentaId==id && x.Estado=="Entregado",ct),"No se puede anular una venta entregada.",409);
@@ -64,6 +66,7 @@ public sealed class ComercialService(AppDbContext db,PropiedadesClient propiedad
         await db.SaveChangesAsync(ct);
     }
     public async Task<Contrato> Firmar(int id,FirmarContratoRequest r,CancellationToken ct) {
+        activation.RequireReady();
         Api.Require(r.FechaFirma!=default && r.FechaProgramadaEntrega>=r.FechaFirma,"Fechas de firma y entrega inválidas.");
         var contrato=await db.Contratos.Include(x=>x.NotaVenta).SingleOrDefaultAsync(x=>x.Id==id,ct)
             ?? throw new BusinessException("Contrato no encontrado.",404);
