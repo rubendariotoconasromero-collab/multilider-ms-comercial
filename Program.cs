@@ -19,7 +19,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(o=>Multilider.Identity.SessionValidation.Configure(o,builder.Configuration));
 builder.Services.AddAuthorization(o => {
     foreach (var permission in new[] { "acceso_clientes","acceso_asesores","acceso_ventas","acceso_historial_ventas",
-        "acceso_contratos","acceso_entregas","acceso_pagos","acceso_ingresos","acceso_egresos" })
+        "acceso_contratos","acceso_entregas","acceso_pagos","acceso_ingresos","acceso_egresos","acceso_correo_masivo" })
         o.AddPolicy(permission,p=>p.RequireAuthenticatedUser().RequireClaim("permission",permission));
 });
 builder.Services.AddCors(o=>o.AddDefaultPolicy(p=>p.WithOrigins(builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? []).AllowAnyHeader().AllowAnyMethod()));
