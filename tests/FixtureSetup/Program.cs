@@ -5,6 +5,7 @@ using MSMultilider.Comercial.Data;
 using MSMultilider.Comercial.Models;
 if(Environment.GetEnvironmentVariable("MULTILIDER_TEST_ISOLATED")!="1")throw new InvalidOperationException("Isolated runner required.");
 if(args.Contains("verify-restoration")){await PhaseFiveRestore.Run();return;}
+if(args.Contains("verify-restoration-f7")){await PhaseFiveRestore.Run(true);return;}
 if(args is ["migration-manifest",var assemblyPath]) {
     var context=new System.Runtime.Loader.AssemblyLoadContext("ArchivedComercial",isCollectible:true);
     var archive=context.LoadFromAssemblyPath(Path.GetFullPath(assemblyPath));
@@ -19,6 +20,7 @@ var builder=new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(connection);
 if(builder.DataSource!="localhost"||!builder.InitialCatalog.StartsWith(prefix,StringComparison.Ordinal)||!Guid.TryParseExact(builder.InitialCatalog[prefix.Length..],"N",out _))throw new InvalidOperationException("Unsafe test database.");
 await using var db=new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlServer(connection).Options);
 if(args.Contains("drop")){await db.Database.EnsureDeletedAsync();Console.WriteLine("Temporary Comercial database removed.");return;}
+if(args.Contains("schema-only")){await db.Database.MigrateAsync();Console.WriteLine("Isolated commercial schema prepared.");return;}
 if(args.Contains("upgrade-f4")) {
     await db.GetService<IMigrator>().MigrateAsync("20261104235150_AvailabilityIntents");
     var id=Guid.NewGuid();var command=Guid.NewGuid();const string json="{}";

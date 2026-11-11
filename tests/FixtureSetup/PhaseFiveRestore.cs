@@ -3,10 +3,10 @@ using System.Security.Cryptography;
 using System.Text;
 
 internal static class PhaseFiveRestore {
-    public static async Task Run() {
-        var root=Path.GetFullPath(Environment.GetEnvironmentVariable("MULTILIDER_F5_BACKUP_ROOT")??throw new InvalidOperationException("Fixture backup root required."));
+    public static async Task Run(bool phaseSeven=false) {
+        var root=Path.GetFullPath(Environment.GetEnvironmentVariable(phaseSeven?"MULTILIDER_F7_ROOT":"MULTILIDER_F5_BACKUP_ROOT")??throw new InvalidOperationException("Fixture backup root required."));
         var safeParent=Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(),"..","backend","storage","framework","testing"));
-        const string folderPrefix="f5-restore-";
+        var folderPrefix=phaseSeven?"f7-":"f5-restore-";
         if(!string.Equals(Path.GetDirectoryName(root),safeParent,StringComparison.OrdinalIgnoreCase)||!Path.GetFileName(root).StartsWith(folderPrefix)||!Guid.TryParseExact(Path.GetFileName(root)[folderPrefix.Length..],"N",out _))
             throw new InvalidOperationException("Unsafe backup fixture root.");
         Directory.CreateDirectory(root);
@@ -29,7 +29,8 @@ internal static class PhaseFiveRestore {
             async Task Exec(string statement) {await using var cmd=new SqlCommand(statement,sql){CommandTimeout=60};await cmd.ExecuteNonQueryAsync();}
             async Task<string> Scalar(string statement) {await using var cmd=new SqlCommand(statement,sql){CommandTimeout=30};return Convert.ToString(await cmd.ExecuteScalarAsync())??"";}
             async Task<string> Fingerprint(string database,string table) {
-                await using var command=new SqlCommand($"SELECT * FROM [{database}].dbo.[{table}] ORDER BY 1 FOR JSON PATH, INCLUDE_NULL_VALUES",sql);
+                var order=table=="f7_import_rows"?"dataset,entity,source_key":"1";
+                await using var command=new SqlCommand($"SELECT * FROM [{database}].dbo.[{table}] ORDER BY {order} FOR JSON PATH, INCLUDE_NULL_VALUES",sql);
                 await using var reader=await command.ExecuteReaderAsync();var buffer=new StringBuilder();while(await reader.ReadAsync())buffer.Append(reader.GetString(0));
                 return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(buffer.ToString())));
             }
@@ -51,9 +52,10 @@ internal static class PhaseFiveRestore {
             var verified=false;
             try {
                 await Exec($"RESTORE DATABASE [{restored}] FROM DISK={Quote(backup)} WITH CHECKSUM,RECOVERY,{string.Join(',',moves)}");
-                foreach(var table in checks)if(await Fingerprint(source,table)!=await Fingerprint(restored,table))throw new InvalidOperationException("Restored fixture rows differ.");
+                var verifiedTables=phaseSeven?checks.Append("f7_import_rows"):checks;
+                foreach(var table in verifiedTables)if(await Fingerprint(source,table)!=await Fingerprint(restored,table))throw new InvalidOperationException("Restored fixture rows differ.");
                 verified=true;
-                Console.WriteLine($"F5 SQL backup/restore verified: {prefix.TrimEnd('_')} ({checks.Length} table fingerprints).");
+                Console.WriteLine($"{(phaseSeven?"F7":"F5")} SQL backup/restore verified: {role} ({verifiedTables.Count()} table fingerprints).");
             } finally {
                 if((destinationName is null||!verified)&&!string.IsNullOrEmpty(await Scalar($"SELECT DB_ID({Quote(restored)})")))await Exec($"DROP DATABASE [{restored}]");
             }
