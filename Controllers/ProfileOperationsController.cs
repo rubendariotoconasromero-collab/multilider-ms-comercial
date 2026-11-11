@@ -57,7 +57,15 @@ public sealed class ProfileOperationsController(AppDbContext db,ProfileCoordinat
     public async Task<IActionResult> Internal(Guid id,CancellationToken ct) {
         await OperationProtocol.Caller(HttpContext,config,"seguridad");
         var op=await db.Set<ProfileOperation>().AsNoTracking().SingleOrDefaultAsync(x=>x.Id==id,ct)??throw new BusinessException("Perfil pendiente.",404);
-        return Ok(new{op.Id,op.State,op.ResourceId,op.PayloadHash,profile=JsonSerializer.Deserialize<JsonElement>(op.Payload),
-            user_id=op.Kind=="cliente"?(await Api.Find(db.Clientes,op.ResourceId,ct)).UserId:(await Api.Find(db.Asesores,op.ResourceId,ct)).UserId});
+        var input=JsonSerializer.Deserialize<JsonElement>(op.Payload);
+        var estado=!input.TryGetProperty("estado",out var enabled)||enabled.ValueKind==JsonValueKind.True||enabled.ToString() is "1" or "true";
+        if(op.Kind=="cliente") {
+            var cliente=await Api.Find(db.Clientes,op.ResourceId,ct);
+            return Ok(new{op.Id,op.State,op.ResourceId,op.PayloadHash,
+                profile=new{cliente.Ci,cliente.NombreCompleto,cliente.Correo,estado},user_id=cliente.UserId});
+        }
+        var asesor=await Api.Find(db.Asesores,op.ResourceId,ct);
+        return Ok(new{op.Id,op.State,op.ResourceId,op.PayloadHash,
+            profile=new{asesor.NombreCompleto,asesor.Correo,estado},user_id=asesor.UserId});
     }
 }

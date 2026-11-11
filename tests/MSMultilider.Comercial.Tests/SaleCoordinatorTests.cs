@@ -21,8 +21,10 @@ public sealed class SaleCoordinatorTests {
         public int FinancePreparations,FinanceActivations;
         public DateTimeOffset Expires=DateTimeOffset.UtcNow.AddMinutes(15);
         public int Renewals;
+        public int Confirmations;
         public bool LoseConfirmOnce;
         private bool lost;
+        private readonly Dictionary<string,JsonElement> receipts=new();
         private JsonElement Result(object value)=>JsonSerializer.SerializeToElement(value,OperationProtocol.Json);
         private JsonElement Reservation()=>Result(new{reserva_id=Guid.Parse("11111111-1111-4111-8111-111111111111"),operacion_id=Operation,propiedad_id=1,fencing_token=1L,estado_reserva=ReservationState,
             estado_propiedad=ReservationState=="Confirmada"?"Vendido":"Reservado",precio_venta=1000m,moneda="BOB",price_version="v1",version="v2",expires_at_utc=Expires});
@@ -38,16 +40,20 @@ public sealed class SaleCoordinatorTests {
                 if(ReservationState=="")throw new ProtocolException("not found",404);
                 return Task.FromResult(Reservation());
             }
-            if(path.EndsWith("/reservar")){ReservationState="Retenida";return Task.FromResult(Reservation());}
-            if(path.EndsWith("/renovar")){Renewals++;Expires=DateTimeOffset.UtcNow.AddMinutes(15);return Task.FromResult(Reservation());}
+            if(method==HttpMethod.Get) {
+                var key=path.Contains("/recibos/")?path.Split('/').Last():"finance";
+                return receipts.TryGetValue(key,out var receipt)?Task.FromResult(receipt):throw new ProtocolException("not found",404);
+            }
+            if(path.EndsWith("/reservar")){ReservationState="Retenida";return Task.FromResult(receipts["reservar"]=Reservation());}
+            if(path.EndsWith("/renovar")){Renewals++;Expires=DateTimeOffset.UtcNow.AddMinutes(15);return Task.FromResult(receipts["renovar:PrepararFinanzas"]=Reservation());}
             if(path.EndsWith("/confirmar")){
-                ReservationState="Confirmada";
+                Confirmations++;ReservationState="Confirmada";receipts["confirmar"]=Reservation();
                 if(LoseConfirmOnce&&!lost){lost=true;throw new HttpRequestException("response lost after commit");}
                 return Task.FromResult(Reservation());
             }
             if(path.EndsWith("/liberar")){ReservationState="Liberada";return Task.FromResult(Reservation());}
-            if(path.EndsWith("/preparar")){FinancePreparations=1;return Task.FromResult(Result(new{state="Preparada"}));}
-            if(path.EndsWith("/activar")){Assert.Equal("Confirmada",ReservationState);FinanceActivations=1;return Task.FromResult(Result(new{state="Activa"}));}
+            if(path.EndsWith("/preparar")){FinancePreparations++;return Task.FromResult(receipts["finance"]=Result(new{id=Operation,propiedad_id=1,venta_id=1,state="Preparada"}));}
+            if(path.EndsWith("/activar")){Assert.Equal("Confirmada",ReservationState);FinanceActivations++;return Task.FromResult(receipts["finance"]=Result(new{id=Operation,propiedad_id=1,venta_id=1,state="Activa"}));}
             if(path.EndsWith("/abortar-preparacion"))return Task.FromResult(Result(new{state="Abortada"}));
             throw new InvalidOperationException("Unexpected test route: "+path);
         }
@@ -111,6 +117,7 @@ public sealed class SaleCoordinatorTests {
         var remote=new Remote(Config()){LoseConfirmOnce=true};var service=new SaleCoordinator(db,remote,Config());var request=Request();
         await service.Begin(request,Actor(),"Bearer not-persisted",default);await Drain(db,service,request.OperacionId);
         Assert.Equal("Confirmada",remote.ReservationState);Assert.Equal(1,await db.Ventas.CountAsync());
+        Assert.Equal(1,remote.Confirmations);
     }
     [Fact]public async Task SameUuidCannotChangeEconomicPayloadOrOwner() {
         await using var connection=new SqliteConnection("Data Source=:memory:");await connection.OpenAsync();

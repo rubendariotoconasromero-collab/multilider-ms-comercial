@@ -22,13 +22,13 @@ public sealed class SaleCoordinator(AppDbContext db,OperationChannel channel,ICo
     public async Task<SaleOperation> Begin(CoordinatedSale r,ClaimsPrincipal actor,string bearer,CancellationToken ct) {
         Enabled();
         Api.Require(r.OperacionId!=Guid.Empty&&r.CommandId!=Guid.Empty&&r.Fecha!=default&&r.TipoVenta is "CONTADO" or "CREDITO","Datos de venta inválidos.");
-        Api.Require((await Api.Find(db.Clientes,r.ClienteId,ct)).Estado&&(await Api.Find(db.Asesores,r.AsesorId,ct)).Estado,"Cliente o asesor inactivo.");
         var payload=JsonSerializer.Serialize(r,OperationProtocol.Json);var hash=OperationProtocol.Hash(r);
         await using(var tx=await db.Database.BeginTransactionAsync(ct)) {
             await OperationProtocol.Lock(db,"commercial:operations",ct);
             var op=await db.Set<SaleOperation>().FindAsync([r.OperacionId],ct);
             if(op is not null){Own(op,actor);Api.Require(op.PayloadHash==hash&&op.CommandId==r.CommandId,"UUID usado con otros datos.",409);}
             else {
+                Api.Require((await Api.Find(db.Clientes,r.ClienteId,ct)).Estado&&(await Api.Find(db.Asesores,r.AsesorId,ct)).Estado,"Cliente o asesor inactivo.");
                 op=new SaleOperation{Id=r.OperacionId,CommandId=r.CommandId,PropiedadId=r.PropiedadId,Payload=payload,PayloadHash=hash,
                     ActorIssuer=actor.FindFirstValue("iss")!,ActorSubject=actor.FindFirstValue("sub")!};
                 db.Add(op);
@@ -123,7 +123,7 @@ public sealed class SaleCoordinator(AppDbContext db,OperationChannel channel,ICo
                     break;
                 case "Reservar": {
                     var offer=JsonSerializer.Deserialize<JsonElement>(op.Offer!);var request=Input(op);ValidateMoney(request,offer.GetProperty("precio_venta").GetDecimal());
-                    receipt=await channel.Send("propiedades",HttpMethod.Post,$"internal/catalogo/v2/operaciones/{op.Id:D}/reservar",
+                    receipt=await PropertyReceipt(op,"reservar",ct)??await channel.Send("propiedades",HttpMethod.Post,$"internal/catalogo/v2/operaciones/{op.Id:D}/reservar",
                         new {operacion_id=op.Id,command_id=OperationProtocol.Command(op.Id,"reservar"),expected_version=offer.GetProperty("version").GetString(),
                             precio_esperado=request.MontoTotal,moneda_esperada=offer.GetProperty("moneda").GetString()},ct);
                     op.Reservation=((JsonElement)receipt).GetRawText();next="PrepararVenta";break;
@@ -133,35 +133,43 @@ public sealed class SaleCoordinator(AppDbContext db,OperationChannel channel,ICo
                 case "PrepararFinanzas": {
                     await KeepReservation(op,ct);
                     var sale=await Api.Find(db.Ventas,op.VentaId!.Value,ct);
-                    receipt=await channel.Send("finanzas",HttpMethod.Post,$"internal/finanzas/v1/operaciones/{op.Id:D}/preparar",
+                    receipt=await FinanceReceipt(op,"Preparada",ct)??await channel.Send("finanzas",HttpMethod.Post,$"internal/finanzas/v1/operaciones/{op.Id:D}/preparar",
                         new{command_id=OperationProtocol.Command(op.Id,"preparar-finanzas"),venta=ComercialService.Snapshot(sale)},ct);
                     next="AutorizarConfirmacion";break;
                 }
-                case "AutorizarConfirmacion":
-                    if((await channel.Check(op.Id,"read",ct)).State!="Confirmando")await KeepReservation(op,ct);
-                    receipt=await channel.Check(op.Id,"pivot",ct);next="ConfirmarPropiedad";break;
+                case "AutorizarConfirmacion": {
+                    var grant=await channel.Check(op.Id,"read",ct);
+                    if(grant.State!="Confirmando") {
+                        await KeepReservation(op,ct);
+                        grant=await channel.Check(op.Id,"pivot",ct);
+                    }
+                    receipt=grant;next="ConfirmarPropiedad";break;
+                }
                 case "ConfirmarPropiedad":
                     receipt=await ReservationChange(op,"confirmar",ct);next="ActivarFinanzas";break;
                 case "ActivarFinanzas":
-                    receipt=await channel.Send("finanzas",HttpMethod.Post,$"internal/finanzas/v1/operaciones/{op.Id:D}/activar",new{command_id=OperationProtocol.Command(op.Id,"activar-finanzas")},ct);
+                    receipt=await FinanceReceipt(op,"Activa",ct)??await channel.Send("finanzas",HttpMethod.Post,$"internal/finanzas/v1/operaciones/{op.Id:D}/activar",new{command_id=OperationProtocol.Command(op.Id,"activar-finanzas")},ct);
                     next="Completar";break;
                 case "Completar":
                     next="Terminada";terminal=true;break;
                 case "Abortar":
-                    receipt=await channel.Check(op.Id,"abort",ct);next="AbortarFinanzas";break;
+                    receipt=await Decision(op,"Abortada","abort",ct);next="AbortarFinanzas";break;
                 case "AbortarFinanzas":
-                    receipt=await channel.Send("finanzas",HttpMethod.Post,$"internal/finanzas/v1/operaciones/{op.Id:D}/abortar-preparacion",new{},ct);next="LiberarReserva";break;
+                    if(await FinanceReceipt(op,"Abortada",ct) is null)
+                        await channel.Send("finanzas",HttpMethod.Post,$"internal/finanzas/v1/operaciones/{op.Id:D}/abortar-preparacion",new{},ct);
+                    receipt=new{estado="Abortada"};next="LiberarReserva";break;
                 case "LiberarReserva":
                     try{receipt=await ReservationChange(op,"liberar",ct);}catch(ProtocolException e)when(e.Status==404){ }
                     next="Compensada";terminal=true;break;
                 case "CerrarFinanzas":
-                    receipt=await channel.Send("finanzas",HttpMethod.Post,$"internal/finanzas/v1/operaciones/{op.Id:D}/cerrar",new{},ct);
+                    receipt=await ReadReceipt("finanzas",$"internal/finanzas/v1/operaciones/{op.Id:D}/recibo-cierre",ct)??
+                        await channel.Send("finanzas",HttpMethod.Post,$"internal/finanzas/v1/operaciones/{op.Id:D}/cerrar",new{},ct);
                     next="RevertirPropiedad";break;
                 case "AutorizarAnulacion":
-                    receipt=await channel.Check(op.Id,"cancel-pivot",ct);next="CerrarFinanzas";break;
+                    receipt=await Decision(op,"Anulando","cancel-pivot",ct);next="CerrarFinanzas";break;
                 case "RevertirPropiedad": {
                     var reserva=JsonSerializer.Deserialize<JsonElement>(op.Reservation!);
-                    receipt=await channel.Send("propiedades",HttpMethod.Post,$"internal/catalogo/v2/operaciones/{op.Id:D}/revertir-confirmacion",
+                    receipt=await PropertyReceipt(op,"revertir",ct)??await channel.Send("propiedades",HttpMethod.Post,$"internal/catalogo/v2/operaciones/{op.Id:D}/revertir-confirmacion",
                         new{command_id=OperationProtocol.Command(op.Id,"revertir"),fencing_token=reserva.GetProperty("fencing_token").GetInt64()},ct);
                     next="CompletarAnulacion";break;
                 }
@@ -177,6 +185,23 @@ public sealed class SaleCoordinator(AppDbContext db,OperationChannel channel,ICo
         }
         observer?.Boundary(op.Id,op.Step,true);
         await FinishStep(op,lease,next,receipt,error,terminal,ct);return true;
+    }
+    private async Task<OperationAuthorization> Decision(SaleOperation op,string state,string action,CancellationToken ct) {
+        var grant=await channel.Check(op.Id,"read",ct);
+        return grant.State==state?grant:await channel.Check(op.Id,action,ct);
+    }
+    private async Task<JsonElement?> ReadReceipt(string authority,string route,CancellationToken ct) {
+        try{return await channel.Send(authority,HttpMethod.Get,route,null,ct);}
+        catch(ProtocolException e)when(e.Status==404){return null;}
+    }
+    private Task<JsonElement?> PropertyReceipt(SaleOperation op,string step,CancellationToken ct)=>
+        ReadReceipt("propiedades",$"internal/catalogo/v2/operaciones/{op.Id:D}/recibos/{step}",ct);
+    private async Task<JsonElement?> FinanceReceipt(SaleOperation op,string state,CancellationToken ct) {
+        var result=await ReadReceipt("finanzas",$"internal/finanzas/v1/operaciones/{op.Id:D}",ct);
+        if(result is not {} row || row.GetProperty("state").GetString()!=state)return null;
+        Api.Require(row.GetProperty("id").GetGuid()==op.Id && row.GetProperty("propiedad_id").GetInt32()==op.PropiedadId &&
+            (state=="Abortada" || row.GetProperty("venta_id").GetInt32()==op.VentaId),"Recibo financiero incompatible.",409);
+        return row;
     }
     private CoordinatedSale Input(SaleOperation op)=>JsonSerializer.Deserialize<CoordinatedSale>(op.Payload,OperationProtocol.Json)!;
     private static void ValidateMoney(CoordinatedSale r,decimal price) {
@@ -222,6 +247,7 @@ public sealed class SaleCoordinator(AppDbContext db,OperationChannel channel,ICo
         Api.Require(current.GetProperty("expires_at_utc").GetDateTimeOffset()>DateTimeOffset.UtcNow.AddSeconds(15),"No hay tiempo suficiente para confirmar la reserva.",409);
     }
     private async Task<JsonElement> ReservationChange(SaleOperation op,string action,CancellationToken ct,string? commandStep=null) {
+        if(await PropertyReceipt(op,commandStep??action,ct) is {} receipt)return receipt;
         JsonElement reservation;
         if(op.Reservation is null || action=="liberar") {
             reservation=await channel.Send("propiedades",HttpMethod.Get,$"internal/catalogo/v2/operaciones/{op.Id:D}/reserva",null,ct);

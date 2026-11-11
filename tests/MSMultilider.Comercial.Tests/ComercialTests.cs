@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using MSMultilider.Comercial.Infrastructure;
 using Xunit;
 namespace MSMultilider.Comercial.Tests;
 
@@ -85,6 +87,11 @@ public sealed class ComercialTests {
         using var good=new MultipartFormDataContent();good.Add(new ByteArrayContent(pdf),"archivo","../../outside.pdf");
         await(await client.PostAsync("/api/contratos/1/documento",good)).Json();
         Assert.Equal(pdf,await client.GetByteArrayAsync("/api/contratos/1/descargar"));
+        var store=app.Services.GetRequiredService<DocumentStore>();
+        foreach(var unsafeId in new[]{"../../outside.pdf","..\\outside.pdf","/outside.pdf","%2e%2e%2foutside.pdf"}) {
+            var refused=await Assert.ThrowsAsync<BusinessException>(()=>store.Read(unsafeId,default));
+            Assert.Equal(404,refused.Status);
+        }
         client.DefaultRequestHeaders.Authorization=null;
         Assert.Equal(HttpStatusCode.Unauthorized,(await client.GetAsync("/api/contratos/1/descargar")).StatusCode);
     }

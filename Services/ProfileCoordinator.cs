@@ -28,16 +28,22 @@ public sealed class ProfileCoordinator(AppDbContext db,OperationChannel channel)
             else {
                 var name=data.TryGetProperty("nombre_completo",out var n)?n.GetString():null;
                 var email=data.TryGetProperty("correo",out var e)?e.GetString():null;
-                Api.Require(!string.IsNullOrWhiteSpace(name)&&name.Length<=255&&System.Net.Mail.MailAddress.TryCreate(email,out _),"Nombre y correo requeridos.");
+                Api.Require(!string.IsNullOrWhiteSpace(name)&&name.Length<=255,"Indica un nombre de hasta 255 caracteres.");
+                Api.Require(email is {Length:<=255} && System.Net.Mail.MailAddress.TryCreate(email,out var address) &&
+                    address.Address==email,"Indica un correo electrónico válido de hasta 255 caracteres.");
+                Api.Require(OptionalLength(data,"telefono",50)&&OptionalLength(data,"direccion",255),"Teléfono o dirección demasiado largos.");
                 int resource;
                 if(kind=="cliente") {
                     var ci=data.TryGetProperty("ci",out var c)?c.GetString():null;
                     Api.Require(!string.IsNullOrWhiteSpace(ci)&&ci.Length<=50,"CI requerido.");
+                    var expedition=data.TryGetProperty("lugar_expedicion",out var place)?place.GetString():null;
+                    Api.Require(!string.IsNullOrWhiteSpace(expedition)&&expedition.Length<=10,"Indica un lugar de expedición de hasta 10 caracteres.");
+                    Api.Require(!await db.Clientes.AnyAsync(x=>x.Ci==ci&&(!id.HasValue||x.Id!=id.Value),ct),"El CI ya está registrado.");
                     var row=id.HasValue?await Api.Find(db.Clientes,id.Value,ct):new Cliente();
                     Api.Require(row.UserId is null||row.IdentityIssuer==actor.FindFirstValue("iss"),"El vínculo histórico requiere conciliación explícita.",409);
                     if(!id.HasValue)db.Clientes.Add(row);
                     row.Ci=ci!;row.NombreCompleto=name!;row.Correo=email;row.Estado=false;
-                    row.LugarExpedicion=data.TryGetProperty("lugar_expedicion",out var l)?l.GetString():null;
+                    row.LugarExpedicion=expedition;
                     row.Telefono=data.TryGetProperty("telefono",out var t)?t.GetString():null;row.Direccion=data.TryGetProperty("direccion",out var d)?d.GetString():null;
                     await db.SaveChangesAsync(ct);resource=row.Id;
                 } else {
@@ -55,7 +61,9 @@ public sealed class ProfileCoordinator(AppDbContext db,OperationChannel channel)
                     await db.SaveChangesAsync(ct);resource=row.Id;
                 }
                 Api.Require(!await db.Set<ProfileOperation>().AnyAsync(x=>x.Kind==kind&&x.ResourceId==resource&&x.State!="Completada",ct),"Otro cambio del perfil sigue pendiente.",409);
-                result=new ProfileOperation{Id=guid,Kind=kind,ResourceId=resource,Payload=data.GetRawText(),PayloadHash=hash,
+                // Retry only needs the requested activation state. Personal data already belongs to the profile.
+                var retryData=profile.Where(x=>x.Key=="estado").ToDictionary(x=>x.Key,x=>x.Value);
+                result=new ProfileOperation{Id=guid,Kind=kind,ResourceId=resource,Payload=JsonSerializer.Serialize(retryData),PayloadHash=hash,
                     ActorIssuer=actor.FindFirstValue("iss")!,ActorSubject=actor.FindFirstValue("sub")!};db.Add(result);await db.SaveChangesAsync(ct);
             }
             await tx.CommitAsync(ct);
@@ -69,6 +77,9 @@ public sealed class ProfileCoordinator(AppDbContext db,OperationChannel channel)
         }
         db.ChangeTracker.Clear();return (await db.Set<ProfileOperation>().FindAsync([result.Id],ct))!;
     }
+    private static bool OptionalLength(JsonElement data,string field,int length)=>
+        !data.TryGetProperty(field,out var value)||value.ValueKind==JsonValueKind.Null||
+        value.ValueKind==JsonValueKind.String&&value.GetString()!.Length<=length;
     public async Task RecordFailure(Guid id,Exception error,CancellationToken ct) {
         db.ChangeTracker.Clear();await using var tx=await db.Database.BeginTransactionAsync(ct);await OperationProtocol.Lock(db,"commercial:operations",ct);
         var op=await db.Set<ProfileOperation>().FindAsync([id],ct);

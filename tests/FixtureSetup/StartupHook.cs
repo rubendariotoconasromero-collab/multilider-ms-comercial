@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using System.Text.Json;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Multilider.Operations;
 using MSMultilider.Comercial.Services;
 
@@ -64,6 +66,11 @@ public static class StartupHook
 
         public void Transaction(bool committed)
         {
+            if (!committed && new HttpContextAccessor().HttpContext is {} request &&
+                HttpMethods.IsPost(request.Request.Method) &&
+                request.Request.Path.Value is { } route && route.StartsWith("/api/contratos/") && route.EndsWith("/gestionar") &&
+                Guid.TryParse(request.Request.Headers["Idempotency-Key"], out var command))
+                Wait(command, "Adjunto", "before");
             if (stage.Value is not { } current) return;
             var point = current.Receipt ? "Guardar-" + current.Step : current.Step == "PrepararVenta" ? "PersistirVenta" : null;
             if (point is not null) Wait(current.Operation, point, committed ? "after" : "before");
@@ -78,8 +85,17 @@ public static class StartupHook
                 File.WriteAllText(marker + ".finished", "");
         }
 
-        public void BeforeRequest(HttpMethod method, string path)
+        public void BeforeRequest(HttpMethod method, string path, object? body)
         {
+            if (stage.Value is { Receipt: false } action && IsFinalAction(action.Step, method, path, body))
+            {
+                var marker = Path.Combine(directory, $"{action.Operation:N}-Respuesta-{action.Step}-after");
+                if (File.Exists(marker + ".claimed"))
+                {
+                    File.WriteAllText(marker + ".resent", "");
+                    throw new InvalidOperationException("A committed command was sent again instead of querying its receipt.");
+                }
+            }
             if (stage.Value is not { Step: "PrepararFinanzas", Receipt: false } current ||
                 method != HttpMethod.Post || !path.EndsWith("/preparar", StringComparison.Ordinal))
                 return;
@@ -93,10 +109,16 @@ public static class StartupHook
 
         public void CommittedResponse(HttpMethod method, string path, object? body)
         {
-            if (stage.Value is not { Receipt: false } current || method != HttpMethod.Post) return;
+            if (stage.Value is { Receipt: false } current && IsFinalAction(current.Step, method, path, body))
+                Wait(current.Operation, "Respuesta-" + current.Step, "after");
+        }
+
+        private static bool IsFinalAction(string step, HttpMethod method, string path, object? body)
+        {
+            if (method != HttpMethod.Post) return false;
             // Status and renewal calls within a step are separate from its final
             // acknowledgement. Only block the successful response being tested.
-            var finalAction = current.Step switch
+            return step switch
             {
                 "Reservar" => path.EndsWith("/reservar", StringComparison.Ordinal),
                 "PrepararFinanzas" => path.EndsWith("/preparar", StringComparison.Ordinal),
@@ -111,7 +133,6 @@ public static class StartupHook
                 "RevertirPropiedad" => path.EndsWith("/revertir-confirmacion", StringComparison.Ordinal),
                 _ => false,
             };
-            if (finalAction) Wait(current.Operation, "Respuesta-" + current.Step, "after");
         }
 
         public void Wait(Guid operation, string step, string side)
@@ -135,12 +156,12 @@ public static class StartupHook
         }
     }
 
-    private sealed class ObservedChannel(IConfiguration config, Checkpoint boundary) : OperationChannel(config)
+    private sealed class ObservedChannel(IConfiguration config, Checkpoint boundary, ILogger<OperationChannel> logger) : OperationChannel(config, logger)
     {
         public override async Task<JsonElement> Send(string service, HttpMethod method, string path, object? body,
             CancellationToken ct, string? bearer = null)
         {
-            boundary.BeforeRequest(method, path);
+            boundary.BeforeRequest(method, path, body);
             var result = await base.Send(service, method, path, body, ct, bearer);
             boundary.CommittedResponse(method, path, body);
             const string prefix = "internal/identity/v1/operaciones/";

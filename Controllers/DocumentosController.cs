@@ -10,7 +10,8 @@ namespace MSMultilider.Comercial.Controllers;
 [ApiController,Route("api/contratos"),Authorize(Policy="acceso_contratos")]
 public sealed class ContratosController(AppDbContext db,ComercialService service,DocumentStore documents):ControllerBase {
     [HttpGet] public async Task<IActionResult> List(int page=1,[FromQuery(Name="per_page")]int perPage=20,CancellationToken ct=default)=>
-        Ok(await Api.Paginate(db.Contratos.Include(x=>x.NotaVenta).ThenInclude(x=>x.Cliente),page,perPage,ct));
+        Ok(await Api.Paginate(db.Contratos.Where(x=>x.NotaVenta.Estado=="Activa"||x.NotaVenta.Estado=="Anulada")
+            .Include(x=>x.NotaVenta).ThenInclude(x=>x.Cliente),page,perPage,ct));
     [HttpGet("{id:int}")] public async Task<IActionResult> Get(int id,CancellationToken ct)=>Ok(await Api.Find(db.Contratos,id,ct));
     [HttpPost("{id:int}/firmar")] public async Task<IActionResult> Sign(int id,FirmarContratoRequest r,CancellationToken ct)=>Ok(await service.Firmar(id,r,ct));
     [HttpPost("{id:int}/documento"),RequestSizeLimit(11*1024*1024)]
